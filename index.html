@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>農場足球：究極精緻四足超模版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a202c;
+            font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+            touch-action: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border-radius: 20px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            cursor: crosshair;
+        }
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            pointer-events: none;
+            width: 100%;
+            display: flex;
+            justify-content: space-around;
+            color: #fff;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+            font-size: 1.4rem;
+            font-weight: 800;
+            z-index: 10;
+        }
+        .message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.98);
+            padding: 40px;
+            border-radius: 30px;
+            text-align: center;
+            display: none;
+            border: 6px solid #fbbf24;
+            z-index: 100;
+            width: 85%;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        #ai-commentary {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.92);
+            color: #92400e;
+            padding: 15px 25px;
+            border-radius: 40px;
+            font-size: 1.1rem;
+            display: none;
+            z-index: 20;
+            border: 3px solid #fbbf24;
+            width: 85%;
+            text-align: center;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div class="ui-panel">
+        <div>得分: <span id="score">0</span></div>
+        <div>胡蘿蔔: <span id="balls">15</span></div>
+    </div>
+    <div id="ai-commentary">✨ <span id="commentary-text">正在調整走秀姿勢...</span></div>
+    <div id="msgBox" class="message">
+        <h2 id="msgTitle" class="text-3xl font-bold mb-4 text-orange-500">比賽結束！</h2>
+        <div id="msgContent" class="text-xl text-gray-700 mb-8 italic">牛牛正在優雅地計算分數...</div>
+        <button onclick="location.reload()" class="bg-yellow-400 hover:bg-yellow-500 text-amber-900 font-extrabold py-3 px-10 rounded-full shadow-lg transition duration-200">
+            再陪我走一場秀！
+        </button>
+    </div>
+</div>
+
+<script>
+    const apiKey = ""; 
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const ballsEl = document.getElementById('balls');
+    const msgBox = document.getElementById('msgBox');
+    const aiCommentaryEl = document.getElementById('ai-commentary');
+    const commentaryText = document.getElementById('commentary-text');
+
+    let state = {
+        score: 0,
+        balls: 15,
+        isDragging: false,
+        dragStart: { x: 0, y: 0 },
+        dragEnd: { x: 0, y: 0 },
+        isFlying: false,
+        particles: [],
+        clouds: [
+            {x: 80, y: 70, s: 0.2, baseW: 80},
+            {x: 280, y: 130, s: 0.12, baseW: 100},
+            {x: 450, y: 50, s: 0.18, baseW: 70}
+        ]
+    };
+
+    const cow = { 
+        x: 0, y: 140, width: 140, height: 220, dir: 1, 
+        mouthOpen: 0, extraBounce: 0 
+    };
+
+    const carrot = {
+        x: 0, y: 0, vx: 0, vy: 0, rotation: 0, vr: 0,
+        reset() {
+            this.x = canvas.width / 2;
+            this.y = canvas.height - 100;
+            this.vx = 0; this.vy = 0; this.rotation = 0; this.vr = 0;
+            state.isFlying = false;
+        }
+    };
+
+    // --- 背景繪製 ---
+    function drawCloud(x, y, baseW) {
+        ctx.save();
+        ctx.fillStyle = "rgba(186, 230, 253, 0.6)";
+        const offset = 5;
+        drawCloudShape(x, y + offset, baseW);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+        drawCloudShape(x, y, baseW);
+        ctx.restore();
+    }
+
+    function drawCloudShape(x, y, w) {
+        ctx.beginPath();
+        ctx.arc(x, y, w * 0.4, 0, Math.PI * 2);
+        ctx.arc(x + w * 0.35, y + w * 0.05, w * 0.3, 0, Math.PI * 2);
+        ctx.arc(x - w * 0.35, y + w * 0.05, w * 0.3, 0, Math.PI * 2);
+        ctx.arc(x + w * 0.15, y - w * 0.15, w * 0.35, 0, Math.PI * 2);
+        ctx.arc(x - w * 0.15, y - w * 0.15, w * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function drawBackground() {
+        let skyGrd = ctx.createLinearGradient(0, 0, 0, 350);
+        skyGrd.addColorStop(0, "#38BDF8");
+        skyGrd.addColorStop(1, "#BAE6FD");
+        ctx.fillStyle = skyGrd;
+        ctx.fillRect(0, 0, canvas.width, 350);
+
+        state.clouds.forEach(c => {
+            c.x += c.s;
+            if (c.x > canvas.width + 120) c.x = -120;
+            drawCloud(c.x, c.y, c.baseW);
+        });
+
+        ctx.fillStyle = "#A7F3D0";
+        ctx.beginPath();
+        ctx.moveTo(0, 350);
+        ctx.quadraticCurveTo(canvas.width*0.25, 270, canvas.width*0.5, 350);
+        ctx.quadraticCurveTo(canvas.width*0.75, 240, canvas.width, 350);
+        ctx.fill();
+
+        const fY = 350;
+        const fH = canvas.height - fY;
+        ctx.fillStyle = "#4ADE80";
+        ctx.fillRect(0, fY, canvas.width, fH);
+
+        for (let i = 0; i < 10; i++) {
+            ctx.fillStyle = i % 2 === 0 ? "rgba(0,0,0,0.04)" : "transparent";
+            ctx.fillRect(0, fY + i * (fH/10), canvas.width, fH/10);
+        }
+
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(40, fY + 30, canvas.width - 80, fH - 60);
+        ctx.beginPath();
+        ctx.arc(canvas.width/2, fY + fH/2, 50, 0, Math.PI*2);
+        ctx.stroke();
+
+        ctx.fillStyle = "#FEF3C7";
+        for (let i = 10; i < canvas.width; i += 45) {
+            ctx.fillRect(i, fY - 15, 12, 25);
+        }
+        ctx.fillRect(0, fY - 8, canvas.width, 5);
+    }
+
+    // --- 繪製胡蘿蔔 (優化版) ---
+    function drawCarrot(x, y, rotation) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rotation);
+        
+        // 胡蘿蔔主體 (錐形)
+        ctx.beginPath();
+        ctx.moveTo(25, 0); // 尖端
+        ctx.bezierCurveTo(-10, -18, -25, -15, -30, 0); // 上部弧度
+        ctx.bezierCurveTo(-25, 15, -10, 18, 25, 0); // 下部弧度
+        
+        // 漸層色
+        const grad = ctx.createLinearGradient(-30, 0, 25, 0);
+        grad.addColorStop(0, "#F97316"); // 深橘
+        grad.addColorStop(0.6, "#FB923C"); // 中橘
+        grad.addColorStop(1, "#FDBA74"); // 淺橘尖端
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // 輪廓線
+        ctx.strokeStyle = "#9A3412";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 胡蘿蔔紋理 (橫線)
+        ctx.strokeStyle = "rgba(154, 52, 18, 0.4)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-15, -8); ctx.lineTo(-12, -4);
+        ctx.moveTo(-5, 6); ctx.lineTo(-2, 10);
+        ctx.moveTo(5, -5); ctx.lineTo(8, -2);
+        ctx.stroke();
+
+        // 亮點 (高光)
+        ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.beginPath();
+        ctx.ellipse(-15, -5, 10, 3, Math.PI/10, 0, Math.PI*2);
+        ctx.fill();
+
+        // 胡蘿蔔葉子 (扇形羽狀)
+        ctx.fillStyle = "#22C55E";
+        for (let i = 0; i < 3; i++) {
+            ctx.save();
+            ctx.translate(-30, 0);
+            ctx.rotate(-0.5 + i * 0.5);
+            ctx.beginPath();
+            ctx.ellipse(-12, 0, 12, 5, 0, 0, Math.PI*2);
+            ctx.fill();
+            // 葉脈
+            ctx.strokeStyle = "#166534";
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-18,0); ctx.stroke();
+            ctx.restore();
+        }
+
+        ctx.restore();
+    }
+
+    // --- 繪製牛牛 ---
+    function drawCow() {
+        const time = Date.now() / 200;
+        const bounce = Math.sin(time) * 6 + cow.extraBounce;
+        const leg1Swing = Math.sin(time) * 22;
+        const leg2Swing = Math.sin(time + Math.PI) * 22;
+        const leg3Swing = Math.sin(time + 0.5) * 18;
+        const leg4Swing = Math.sin(time + Math.PI + 0.5) * 18;
+        
+        ctx.save();
+        ctx.translate(cow.x + cow.width/2, cow.y + 75 + bounce);
+        ctx.fillStyle = "rgba(0,0,0,0.12)";
+        ctx.beginPath(); ctx.ellipse(0, 105, 65, 15, 0, 0, Math.PI*2); ctx.fill();
+
+        // 後腳
+        ctx.strokeStyle = '#CBD5E1'; ctx.lineWidth = 11; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(-25, 20); ctx.lineTo(-25 + leg2Swing, 85); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(25, 20); ctx.lineTo(25 + leg4Swing, 85); ctx.stroke();
+        ctx.fillStyle = '#1A202C';
+        ctx.beginPath(); ctx.ellipse(-25 + leg2Swing, 85, 8, 5, 0, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(25 + leg4Swing, 85, 8, 5, 0, 0, Math.PI*2); ctx.fill();
+
+        // 身體
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath(); ctx.ellipse(0, 0, 68, 55, 0, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#334155';
+        ctx.beginPath(); ctx.arc(-22, -12, 22, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(38, 18, 30, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(8, 35, 14, 0, Math.PI*2); ctx.fill();
+
+        // 前腳
+        ctx.strokeStyle = '#E2E8F0'; ctx.lineWidth = 14; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(-38, 30); ctx.lineTo(-38 + leg1Swing, 92); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(38, 30); ctx.lineTo(38 + leg3Swing, 92); ctx.stroke();
+        ctx.fillStyle = '#2D3748';
+        ctx.beginPath(); ctx.ellipse(-38 + leg1Swing, 92, 10, 7, 0, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(38 + leg3Swing, 92, 10, 7, 0, 0, Math.PI*2); ctx.fill();
+
+        // 頭部
+        ctx.save();
+        ctx.translate(68 * cow.dir, -48);
+        ctx.fillStyle = '#FDE68A';
+        ctx.beginPath(); ctx.moveTo(-28, -35); ctx.quadraticCurveTo(-38, -58, -22, -68); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(28, -35); ctx.quadraticCurveTo(38, -58, 22, -68); ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath(); ctx.ellipse(-48, -22, 16, 9, -Math.PI/4, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(48, -22, 16, 9, Math.PI/4, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#FFFFFF'; ctx.beginPath(); ctx.arc(0, 0, 50, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#1E293B';
+        ctx.beginPath(); ctx.arc(-18, -12, 7, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(18, -12, 7, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#FFF';
+        ctx.beginPath(); ctx.arc(-20, -14, 2, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(16, -14, 2, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(251, 113, 133, 0.45)';
+        ctx.beginPath(); ctx.arc(-30, 12, 12, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(30, 12, 12, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#FED7E2';
+        const mouthOpenness = 24 + cow.mouthOpen + (cow.extraBounce < 0 ? 15 : 0);
+        ctx.beginPath(); ctx.ellipse(0, 24, 35, mouthOpenness, 0, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#F472B6';
+        ctx.beginPath(); ctx.arc(-12, 18, 5, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(12, 18, 5, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+        ctx.restore();
+
+        if (Math.abs(cow.extraBounce) > 0.1) cow.extraBounce *= 0.9;
+        else cow.extraBounce = 0;
+    }
+
+    function createExplosion(x, y) {
+        for (let i = 0; i < 25; i++) {
+            state.particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * 14,
+                vy: (Math.random() - 0.5) * 14 - 6,
+                life: 1.0,
+                size: Math.random() * 15 + 10,
+                type: Math.random() > 0.5 ? '⭐' : '❤️'
+            });
+        }
+    }
+
+    async function callGemini(prompt) {
+        const systemPrompt = "你是一隻身材高窕、有著四隻長腿的超模牛。常用『哞～』結尾。請用繁體中文回答，不超過 15 字。";
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] }
+                })
+            });
+            const data = await response.json();
+            return data.candidates?.[0]?.content?.parts?.[0]?.text || "哞～這球進得真漂亮！";
+        } catch (err) { return "哞～進球了，來看我的長腿！"; }
+    }
+
+    async function handleAIInteraction(type) {
+        aiCommentaryEl.style.display = 'block';
+        commentaryText.innerText = "牛牛正在優雅點評...";
+        let prompt = type === 'goal' ? "進球了！我開心地跳舞。" : (type === 'miss' ? "沒丟中，優雅地安慰。" : "遊戲結束點評。");
+        const text = await callGemini(prompt);
+        commentaryText.innerText = `🐮: ${text}`;
+        if (type === 'end') document.getElementById('msgContent').innerText = text;
+        else setTimeout(() => { aiCommentaryEl.style.display = 'none'; }, 4000);
+    }
+
+    function playMoo() {
+        if ('speechSynthesis' in window) {
+            const msg = new SpeechSynthesisUtterance("Moo!");
+            msg.pitch = 1.4; msg.rate = 1.1; window.speechSynthesis.speak(msg);
+        }
+    }
+
+    function update() {
+        cow.x += (2.2 + state.score/220) * cow.dir;
+        if (cow.x + cow.width > canvas.width || cow.x < 0) cow.dir *= -1;
+        cow.mouthOpen = Math.abs(Math.sin(Date.now() / 280)) * 6;
+
+        if (state.isFlying) {
+            carrot.x += carrot.vx; carrot.y += carrot.vy;
+            carrot.vy += 0.22; carrot.rotation += carrot.vr;
+
+            if (carrot.x > cow.x && carrot.x < cow.x + cow.width + 40 &&
+                carrot.y > cow.y && carrot.y < cow.y + cow.height) {
+                state.score += 10;
+                scoreEl.innerText = state.score;
+                createExplosion(carrot.x, carrot.y);
+                playMoo();
+                cow.extraBounce = -40;
+                handleAIInteraction('goal');
+                carrot.reset();
+            }
+
+            if (carrot.y > canvas.height + 60) {
+                if (state.balls > 0) { handleAIInteraction('miss'); carrot.reset(); }
+                else { state.isFlying = false; msgBox.style.display = 'block'; handleAIInteraction('end'); }
+            }
+        }
+
+        for(let i=state.particles.length-1; i>=0; i--) {
+            let p = state.particles[i];
+            p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.life -= 0.015;
+            if (p.life <= 0) state.particles.splice(i, 1);
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawBackground();
+        drawCow();
+
+        if (state.isDragging) {
+            ctx.setLineDash([6, 6]);
+            ctx.strokeStyle = "rgba(255,255,255,0.7)";
+            ctx.beginPath(); ctx.moveTo(carrot.x, carrot.y); ctx.lineTo(state.dragEnd.x, state.dragEnd.y); ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // 繪製優化後的胡蘿蔔
+        drawCarrot(carrot.x, carrot.y, carrot.rotation);
+
+        state.particles.forEach(p => {
+            ctx.globalAlpha = p.life;
+            ctx.font = `${p.size}px Arial`;
+            ctx.fillText(p.type, p.x, p.y);
+        });
+        ctx.globalAlpha = 1;
+
+        requestAnimationFrame(() => { update(); draw(); });
+    }
+
+    function getPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const cx = e.touches ? e.touches[0].clientX : e.clientX;
+        const cy = e.touches ? e.touches[0].clientY : e.clientY;
+        return { x: cx - rect.left, y: cy - rect.top };
+    }
+    canvas.addEventListener('mousedown', (e) => {
+        if (state.isFlying) return;
+        state.isDragging = true;
+        state.dragStart = getPos(e);
+        state.dragEnd = state.dragStart;
+    });
+    window.addEventListener('mousemove', (e) => { if (state.isDragging) state.dragEnd = getPos(e); });
+    window.addEventListener('mouseup', () => {
+        if (!state.isDragging) return;
+        state.isDragging = false;
+        carrot.vx = (state.dragStart.x - state.dragEnd.x) * 0.16;
+        carrot.vy = (state.dragStart.y - state.dragEnd.y) * 0.16;
+        carrot.vr = carrot.vx * 0.08;
+        if(Math.abs(carrot.vx) > 0.5) { state.isFlying = true; state.balls--; ballsEl.innerText = state.balls; }
+    });
+
+    canvas.addEventListener('touchstart', (e) => { e.preventDefault(); if (state.isFlying) return; state.isDragging = true; state.dragStart = getPos(e); state.dragEnd = state.dragStart; }, {passive:false});
+    canvas.addEventListener('touchmove', (e) => { e.preventDefault(); if (state.isDragging) state.dragEnd = getPos(e); }, {passive:false});
+    canvas.addEventListener('touchend', (e) => { e.preventDefault(); if (state.isDragging) { state.isDragging = false; carrot.vx = (state.dragStart.x - state.dragEnd.x) * 0.16; carrot.vy = (state.dragStart.y - state.dragEnd.y) * 0.16; carrot.vr = carrot.vx * 0.08; if(Math.abs(carrot.vx) > 0.5) { state.isFlying = true; state.balls--; ballsEl.innerText = state.balls; } } }, {passive:false});
+
+    function resize() {
+        canvas.width = Math.min(window.innerWidth, 480);
+        canvas.height = Math.min(window.innerHeight, 680);
+        carrot.reset();
+        cow.x = canvas.width/2 - cow.width/2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    draw();
+</script>
+</body>
+</html>
